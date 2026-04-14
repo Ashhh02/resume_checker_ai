@@ -506,7 +506,7 @@ def call_llm(context: str, prompt: str, job_description: str | None = None):
 
 
 st.set_page_config(
-    page_title="Resume & Career Advisor",
+    page_title="Resume Analysis and Career Recommendation System",
     page_icon="CV",
     layout="wide",
 )
@@ -620,7 +620,7 @@ if "messages" not in st.session_state:
     ]
 
 
-st.title("Resume & Career Advisor")
+st.title("Resume Analysis and Career Recommendation System")
 st.caption("Upload your resume -> ask questions -> get expert AI feedback")
 st.divider()
 
