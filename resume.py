@@ -1,509 +1,195 @@
-import os
-import tempfile
 import uuid
-
-import ollama
 import streamlit as st
-import requests
-from langchain_community.document_loaders import PyMuPDFLoader
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from sentence_transformers import CrossEncoder
-from streamlit.runtime.uploaded_file_manager import UploadedFile
-from bs4 import BeautifulSoup
+from resume_ai import call_llm, extract_job_description, extract_score, search_resume_context
+from resume_db import (
+    process_document,
+    save_chat_message,
+    save_resume_chunks,
+    save_resume_upload,
+    test_mysql_connection,
+)
 
-try:
-    import mysql.connector as mysql_connector
-    from mysql.connector import Error
-except ImportError:  # pragma: no cover - app can still run without MySQL support
-    mysql_connector = None
-    Error = Exception
+def inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+            .stApp {
+                background:
+                    radial-gradient(circle at top left, rgba(46, 134, 222, 0.12), transparent 24%),
+                    radial-gradient(circle at top right, rgba(9, 132, 227, 0.10), transparent 18%),
+                    linear-gradient(180deg, #0b1020 0%, #0f172a 100%);
+                color: #e5eef9;
+            }
 
+            .block-container {
+                padding-top: 1.5rem;
+                padding-bottom: 1.5rem;
+                max-width: 1280px;
+            }
 
-system_prompt = """
-You are a senior resume reviewer, recruiter, and career advisor.
+            section[data-testid="stSidebar"] {
+                background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(17, 24, 39, 0.98));
+                border-right: 1px solid rgba(148, 163, 184, 0.12);
+            }
 
-You analyze only the provided resume context and optional job description.
+            section[data-testid="stSidebar"] > div {
+                padding-top: 1.25rem;
+            }
 
-Your responsibilities:
-- Score the resume from 0 to 100
-- If a job description is provided, calculate a match score from 0 to 100
-- Identify missing skills, role gaps, and weak sections
-- Rewrite resume content when asked
-- Suggest career paths, next-step roles, and improvement priorities
-- Give specific, actionable feedback with examples
+            div[data-testid="stHeader"] {
+                background: transparent;
+            }
 
-Response rules:
-- Use only facts found in the provided context
-- Do not invent employers, degrees, certifications, tools, or achievements
-- If information is missing, say so clearly
-- Avoid generic advice like "tailor your resume" unless you explain exactly how
-- Keep the response structured with these exact sections when possible:
-  1. **Score**
-  2. **Match Analysis**
-  3. **Missing Skills**
-  4. **Resume Rewrite**
-  5. **Career Recommendations**
-  6. **Next Actions**
-- Use bullets, short paragraphs, and concise examples
-- If rewriting content, provide improved text in quotation marks or a code block
-- Be direct, helpful, and honest
-"""
+            .hero-card {
+                background: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(30, 41, 59, 0.80));
+                border: 1px solid rgba(148, 163, 184, 0.16);
+                border-radius: 24px;
+                padding: 1.6rem 1.7rem;
+                box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
+            }
 
+            .hero-kicker {
+                text-transform: uppercase;
+                letter-spacing: 0.18em;
+                color: #93c5fd;
+                font-size: 0.72rem;
+                font-weight: 700;
+                margin-bottom: 0.5rem;
+            }
 
-def get_mysql_config() -> dict[str, object]:
-    return {
-        "host": os.getenv("DB_HOST") or "127.0.0.1",
-        "port": int(os.getenv("DB_PORT") or "3306"),
-        "user": os.getenv("DB_USER") or "root",
-        "password": os.getenv("DB_PASSWORD") or "4Shyn.zyyy20",
-        "database": os.getenv("DB_NAME") or "resume_ai",
-    }
+            .hero-title {
+                font-size: 2.05rem;
+                font-weight: 800;
+                line-height: 1.05;
+                color: #f8fafc;
+                margin-bottom: 0.45rem;
+            }
 
+            .hero-subtitle {
+                color: rgba(226, 232, 240, 0.78);
+                font-size: 0.98rem;
+                margin-bottom: 1rem;
+            }
 
-def connect_mysql():
-    if mysql_connector is None:
-        st.session_state["mysql_error"] = "mysql-connector-python is not installed"
-        return None
+            .pill-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
 
-    try:
-        return mysql_connector.connect(**get_mysql_config())
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-        return None
+            .pill {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.4rem;
+                padding: 0.35rem 0.7rem;
+                border-radius: 999px;
+                background: rgba(15, 23, 42, 0.65);
+                border: 1px solid rgba(148, 163, 184, 0.15);
+                color: #dbeafe;
+                font-size: 0.82rem;
+            }
 
+            .section-card {
+                background: rgba(15, 23, 42, 0.72);
+                border: 1px solid rgba(148, 163, 184, 0.16);
+                border-radius: 20px;
+                padding: 1rem 1rem 0.75rem 1rem;
+                box-shadow: 0 18px 60px rgba(0, 0, 0, 0.18);
+            }
 
-@st.cache_resource
-def test_mysql_connection() -> bool:
-    connection = connect_mysql()
-    if connection is None:
-        return False
+            .section-label {
+                font-size: 0.8rem;
+                text-transform: uppercase;
+                letter-spacing: 0.15em;
+                color: #93c5fd;
+                font-weight: 700;
+                margin-bottom: 0.6rem;
+            }
 
-    try:
-        return connection.is_connected()
-    finally:
-        connection.close()
+            .soft-note {
+                color: rgba(226, 232, 240, 0.7);
+                font-size: 0.92rem;
+                margin-bottom: 0.5rem;
+            }
 
+            .stTextInput input, .stTextArea textarea {
+                background: rgba(15, 23, 42, 0.88) !important;
+                color: #f8fafc !important;
+                border: 1px solid rgba(148, 163, 184, 0.18) !important;
+                border-radius: 14px !important;
+            }
 
-def get_or_create_user_id(session_id: str) -> int | None:
-    connection = connect_mysql()
-    if connection is None:
-        return None
+            .stTextInput input::placeholder,
+            .stTextArea textarea::placeholder {
+                color: rgba(203, 213, 225, 0.55) !important;
+            }
 
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            SELECT id
-            FROM users
-            WHERE session_id = %s
-            """,
-            (session_id,),
-        )
-        row = cursor.fetchone()
-        if row:
-            return row[0]
+            .stButton > button {
+                border-radius: 14px;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                background: linear-gradient(135deg, #334155, #1f2937);
+                color: #f8fafc;
+                font-weight: 600;
+                padding: 0.65rem 1rem;
+            }
 
-        cursor.execute(
-            """
-            INSERT INTO users (session_id)
-            VALUES (%s)
-            """,
-            (session_id,),
-        )
-        connection.commit()
-        return cursor.lastrowid
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-        return None
-    finally:
-        if cursor is not None:
-            cursor.close()
-        connection.close()
+            .stButton > button:hover {
+                border-color: rgba(96, 165, 250, 0.55);
+                transform: translateY(-1px);
+            }
 
+            div[data-testid="stChatMessage"] {
+                border-radius: 18px;
+                padding-top: 0.25rem;
+                padding-bottom: 0.25rem;
+            }
 
-def save_resume_upload(session_id: str, file_name: str, chunk_count: int) -> int | None:
-    connection = connect_mysql()
-    if connection is None:
-        return None
-
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        user_id = get_or_create_user_id(session_id)
-        if user_id is None:
-            raise RuntimeError("Could not create or load user row.")
-
-        cursor.execute(
-            """
-            INSERT INTO resumes (user_id, file_name, chunk_count)
-            VALUES (%s, %s, %s)
-            """,
-            (user_id, file_name, chunk_count),
-        )
-        connection.commit()
-        return cursor.lastrowid
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-        return None
-    except RuntimeError as exc:
-        st.session_state["mysql_error"] = str(exc)
-        return None
-    finally:
-        if cursor is not None:
-            cursor.close()
-        connection.close()
-
-
-def save_resume_chunks(resume_id: int, chunks: list[Document]) -> None:
-    connection = connect_mysql()
-    if connection is None:
-        return
-
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        cursor.executemany(
-            """
-            INSERT INTO resume_chunks (resume_id, chunk_index, chunk_text)
-            VALUES (%s, %s, %s)
-            """,
-            [
-                (resume_id, idx, chunk.page_content)
-                for idx, chunk in enumerate(chunks)
-            ],
-        )
-        connection.commit()
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-    finally:
-        if cursor is not None:
-            cursor.close()
-        connection.close()
-
-
-def load_resume_chunks(session_id: str, file_name: str | None = None) -> list[str]:
-    connection = connect_mysql()
-    if connection is None:
-        return []
-
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        if file_name:
-            cursor.execute(
-                """
-                SELECT c.chunk_text
-                FROM users u
-                JOIN resumes r ON r.user_id = u.id
-                JOIN resume_chunks c ON c.resume_id = r.id
-                WHERE u.session_id = %s AND r.file_name = %s
-                ORDER BY c.chunk_index ASC, c.id ASC
-                """,
-                (session_id, file_name),
-            )
-        else:
-            cursor.execute(
-                """
-                SELECT c.chunk_text
-                FROM users u
-                JOIN resumes r ON r.user_id = u.id
-                JOIN resume_chunks c ON c.resume_id = r.id
-                WHERE u.session_id = %s
-                ORDER BY r.uploaded_at DESC, r.id DESC, c.chunk_index ASC, c.id ASC
-                """,
-                (session_id,),
-            )
-        rows = cursor.fetchall()
-        return [row[0] for row in rows]
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-        return []
-    finally:
-        if cursor is not None:
-            cursor.close()
-        connection.close()
-
-
-def load_latest_resume_name() -> str | None:
-    connection = connect_mysql()
-    if connection is None:
-        return None
-
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            SELECT file_name
-            FROM resumes
-            ORDER BY uploaded_at DESC, id DESC
-            LIMIT 1
-            """
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-        return None
-    finally:
-        if cursor is not None:
-            cursor.close()
-        connection.close()
-
-
-def load_latest_resume_reference() -> tuple[int, str] | None:
-    connection = connect_mysql()
-    if connection is None:
-        return None
-
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            SELECT r.id, r.file_name
-            FROM resumes r
-            ORDER BY r.uploaded_at DESC, r.id DESC
-            LIMIT 1
-            """
-        )
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return row[0], row[1]
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-        return None
-    finally:
-        if cursor is not None:
-            cursor.close()
-        connection.close()
-
-
-def load_resume_chunks_for_latest_upload() -> list[str]:
-    latest_ref = load_latest_resume_reference()
-    if latest_ref is None:
-        return []
-
-    latest_resume_id, _ = latest_ref
-    connection = connect_mysql()
-    if connection is None:
-        return []
-
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            SELECT chunk_text
-            FROM resume_chunks
-            WHERE resume_id = %s
-            ORDER BY chunk_index ASC, id ASC
-            """,
-            (latest_resume_id,),
-        )
-        return [row[0] for row in cursor.fetchall()]
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-        return []
-    finally:
-        if cursor is not None:
-            cursor.close()
-        connection.close()
-
-
-def save_chat_message(session_id: str, role: str, content: str) -> None:
-    connection = connect_mysql()
-    if connection is None:
-        return
-
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            INSERT INTO chat_messages (session_id, role, content)
-            VALUES (%s, %s, %s)
-            """,
-            (session_id, role, content),
-        )
-        connection.commit()
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-    finally:
-        if cursor is not None:
-            cursor.close()
-        connection.close()
-
-
-@st.cache_resource
-def load_cross_encoder():
-    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-
-
-def extract_job_description(url: str) -> str:
-    if not url or not url.strip():
-        raise ValueError("Please paste a job URL first.")
-
-    response = requests.get(
-        url.strip(),
-        timeout=15,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            )
-        },
-    )
-    response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    parts = []
-    if soup.title and soup.title.get_text(strip=True):
-        parts.append(f"Title: {soup.title.get_text(strip=True)}")
-
-    for meta_name in ("description", "og:description"):
-        meta = soup.find("meta", attrs={"name": meta_name}) or soup.find(
-            "meta", attrs={"property": meta_name}
-        )
-        if meta and meta.get("content"):
-            parts.append(f"{meta_name.title()}: {meta['content'].strip()}")
-
-    text = soup.get_text(separator="\n")
-    text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
-    parts.append(text)
-
-    job_description = "\n\n".join(parts)
-    return job_description[:3000]
-
-
-def process_document(uploaded_file: UploadedFile) -> list[Document]:
-    if uploaded_file is None:
-        raise ValueError("Please upload a PDF resume first.")
-    if getattr(uploaded_file, "size", 0) == 0:
-        raise ValueError("The uploaded PDF is empty.")
-
-    temp_file = tempfile.NamedTemporaryFile("wb", suffix=".pdf", delete=False)
-    temp_file.write(uploaded_file.read())
-    temp_file_path = temp_file.name
-    temp_file.close()
-
-    try:
-        loader = PyMuPDFLoader(temp_file_path)
-        docs = loader.load()
-    finally:
-        if os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400,
-        chunk_overlap=100,
+            [data-testid="stChatMessageAvatarUser"],
+            [data-testid="stChatMessageAvatarAssistant"] {
+                border-radius: 12px;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-    chunks = splitter.split_documents(docs)
-    if not chunks:
-        raise ValueError("No readable text was found in this PDF.")
+def render_hero() -> None:
+    resume_loaded = bool(st.session_state.get("resume_loaded"))
+    job_loaded = bool((st.session_state.get("job_description") or "").strip())
+    job_url = bool((st.session_state.get("job_url") or "").strip())
 
-    return chunks
-
-
-def dedupe_documents(documents: list[str]) -> list[str]:
-    seen = set()
-    unique_documents = []
-    for doc in documents:
-        normalized = " ".join(doc.split())
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            unique_documents.append(doc)
-    return unique_documents
-
-
-def re_rank_cross_encoders(prompt: str, documents: list[str], top_k: int = 4):
-    encoder = load_cross_encoder()
-    unique_documents = dedupe_documents(documents)
-    if not unique_documents:
-        return "", [], []
-
-    top_k = min(max(3, top_k), 5, len(unique_documents))
-    ranks = encoder.rank(prompt, unique_documents, top_k=top_k)
-
-    relevant_text = []
-    relevant_ids = []
-    seen_ids = set()
-    for r in ranks:
-        corpus_id = r["corpus_id"]
-        if corpus_id in seen_ids:
-            continue
-        seen_ids.add(corpus_id)
-        relevant_text.append(unique_documents[corpus_id])
-        relevant_ids.append(corpus_id)
-
-    return "\n\n".join(relevant_text), relevant_ids, relevant_text
-
-
-def search_resume_context(
-    prompt: str,
-    session_id: str,
-    file_name: str | None = None,
-    job_description: str | None = None,
-):
-    docs = load_resume_chunks(session_id, file_name)
-    if not docs:
-        docs = load_resume_chunks_for_latest_upload()
-        if not docs:
-            return "", [], []
-
-    search_query = prompt
-    if job_description:
-        search_query = f"{prompt}\n\nJob Description:\n{job_description}"
-
-    context, relevant_ids, selected_chunks = re_rank_cross_encoders(search_query, docs)
-    return context, relevant_ids, selected_chunks
-
-
-def extract_score(text: str) -> int | None:
-    import re
-
-    patterns = [
-        r"(?:Match Score|Resume Score|Score)\s*[:\-]?\s*(\d{1,3})\s*/\s*100",
-        r"(?:Match Score|Resume Score|Score)\s*[:\-]?\s*(\d{1,3})\b",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            score = int(match.group(1))
-            return max(0, min(score, 100))
-    return None
-
-
-def call_llm(context: str, prompt: str, job_description: str | None = None):
-    user_content = (
-        "Use the resume context below to answer the request.\n\n"
-        f"Resume Context:\n{context}\n\n"
-    )
-    if job_description and job_description.strip():
-        user_content += f"Job Description:\n{job_description.strip()}\n\n"
-    user_content += f"User Request:\n{prompt}"
-
-    response = ollama.chat(
-        model="llama3.2:3b",
-        stream=True,
-        options={
-            "temperature": 0.2,
-        },
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
+    st.markdown(
+        f"""
+        <div class="hero-card">
+            <div class="hero-kicker">AI Resume Analyzer + Job Matching</div>
+            <div class="hero-title">Resume Analysis and Career Recommendation System</div>
+            <div class="hero-subtitle">
+                Upload a resume, match it against a job description or URL, and get a structured score, skill gaps, and practical next steps.
+            </div>
+            <div class="pill-row">
+                <span class="pill">Local Ollama</span>
+                <span class="pill">MySQL-backed history</span>
+                <span class="pill">Cross-encoder reranking</span>
+                <span class="pill">{'Resume loaded' if resume_loaded else 'Resume not loaded'}</span>
+                <span class="pill">{'Job source ready' if (job_loaded or job_url) else 'No job source yet'}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    for chunk in response:
-        if not chunk["done"]:
-            yield chunk["message"]["content"]
+def render_status_strip() -> None:
+    resume_loaded = bool(st.session_state.get("resume_loaded"))
+    resume_name = st.session_state.get("resume_name") or "No resume loaded"
+    job_text = (st.session_state.get("job_description") or "").strip()
 
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Resume", "Ready" if resume_loaded else "Pending", resume_name)
+    with col2:
+        st.metric("Job Source", "Loaded" if job_text else "Pending", "URL or pasted text")
+    with col3:
+        st.metric("Analysis", "RAG + Match", "Local Ollama")
 
 st.set_page_config(
     page_title="Resume Analysis and Career Recommendation System",
@@ -511,12 +197,18 @@ st.set_page_config(
     layout="wide",
 )
 
+inject_styles()
+
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = uuid.uuid4().hex
 
 with st.sidebar:
-    st.title("Resume Explorer")
-    st.divider()
+    st.markdown('<div class="section-label">Workspace</div>', unsafe_allow_html=True)
+    st.markdown("### Resume Explorer")
+    st.markdown(
+        '<div class="soft-note">Upload a resume, load a job description, then ask for a fit analysis.</div>',
+        unsafe_allow_html=True,
+    )
 
     if test_mysql_connection():
         st.success("MySQL connected")
@@ -527,7 +219,7 @@ with st.sidebar:
         else:
             st.info("MySQL is not connected yet.")
 
-    st.subheader("Upload Your Resume")
+    st.markdown('<div class="section-label">Resume</div>', unsafe_allow_html=True)
     uploaded_file = st.file_uploader(
         "Upload PDF resume",
         type=["pdf"],
@@ -535,7 +227,7 @@ with st.sidebar:
         help="Your resume is processed locally. Nothing is sent to the cloud.",
     )
 
-    st.subheader("Job Matching")
+    st.markdown('<div class="section-label">Job Match</div>', unsafe_allow_html=True)
     st.session_state["job_url"] = st.text_input(
         "Paste Job URL",
         value=st.session_state.get("job_url", ""),
@@ -580,20 +272,28 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("Quick Questions")
-    quick_questions = [
-        "Is my resume strong overall?",
-        "What are the weaknesses in my resume?",
-        "What jobs or roles fit my experience?",
-        "Rewrite my professional summary section.",
-        "How can I improve my skills section?",
-        "What salary range should I expect?",
-        "Give me 5 interview questions based on my resume.",
-        "What is missing from my resume?",
-    ]
-    for q in quick_questions:
-        if st.button(q, use_container_width=True, key=f"quick_{q}"):
-            st.session_state["quick_input"] = q
+    with st.expander("Quick Prompts", expanded=False):
+        quick_questions = [
+            "Is my resume strong overall?",
+            "What are the weaknesses in my resume?",
+            "What jobs or roles fit my experience?",
+            "Rewrite my professional summary section.",
+            "How can I improve my skills section?",
+            "What salary range should I expect?",
+            "Give me 5 interview questions based on my resume.",
+            "What is missing from my resume?",
+        ]
+
+        for i in range(0, len(quick_questions), 2):
+            left = quick_questions[i]
+            right = quick_questions[i + 1] if i + 1 < len(quick_questions) else None
+            cols = st.columns(2)
+            with cols[0]:
+                if st.button(left, use_container_width=True, key=f"quick_{left}"):
+                    st.session_state["quick_input"] = left
+            with cols[1]:
+                if right and st.button(right, use_container_width=True, key=f"quick_{right}"):
+                    st.session_state["quick_input"] = right
 
     st.divider()
     if st.button("Clear Chat", use_container_width=True):
@@ -606,28 +306,33 @@ with st.sidebar:
         st.session_state["resume_loaded"] = False
         st.rerun()
 
-
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {
             "role": "assistant",
             "content": (
-                "Hi! I'm your Career Advisor. Upload your resume in the sidebar, then "
-                "ask me anything and I'll review it section by section, suggest "
-                "improvements, and help you find the right career path."
+                "Upload your resume, optionally add a job description or job URL, and I’ll give you a structured match analysis with score, gaps, and suggestions."
             ),
         }
     ]
 
+render_hero()
+st.write("")
+render_status_strip()
+st.write("")
 
-st.title("Resume Analysis and Career Recommendation System")
-st.caption("Upload your resume -> ask questions -> get expert AI feedback")
-st.divider()
+st.markdown('<div class="section-label">Conversation</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="soft-note">Ask for a score, skill gap analysis, rewrite suggestions, or job-fit feedback.</div>',
+    unsafe_allow_html=True,
+)
 
+USER_AVATAR = "👤" 
+AI_AVATAR = "🤖"
 for msg in st.session_state.messages:
-    with st.chat_message(
-        msg["role"], avatar="assistant" if msg["role"] == "assistant" else "user"
-    ):
+    avatar_icon = AI_AVATAR if msg["role"] == "assistant" else USER_AVATAR
+    
+    with st.chat_message(msg["role"], avatar=avatar_icon):
         st.markdown(msg["content"])
 
 default_input = st.session_state.pop("quick_input", "")
@@ -639,14 +344,14 @@ prompt = st.chat_input(
 
 if prompt:
     if not st.session_state.get("resume_loaded"):
-        with st.chat_message("assistant", avatar="assistant"):
+        with st.chat_message("assistant", avatar="⚠️"):
             st.warning("Please upload and process your resume first using the sidebar.")
         st.stop()
 
     st.session_state.messages.append({"role": "user", "content": prompt})
     save_chat_message(st.session_state["session_id"], "user", prompt)
 
-    with st.chat_message("user", avatar="user"):
+    with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar="assistant"):
@@ -695,11 +400,11 @@ if prompt:
 
         match_score = extract_score(full_response)
         if match_score is not None:
-            st.markdown("**Match Score**")
+            st.markdown("#### Match Score")
             st.progress(match_score / 100.0)
             st.caption(f"{match_score}/100")
 
         with st.expander("Resume sections used for this answer"):
             for i, chunk in enumerate(selected_chunks):
-                preview = chunk[:300].replace("\n", " ")
+                preview = chunk[:500].replace("\n", " ")
                 st.markdown(f"- **Chunk {i + 1}**: {preview}...")
