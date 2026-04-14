@@ -1,6 +1,6 @@
 # Resume & Career Advisor Chatbot
 
-A Streamlit-based AI chatbot that analyzes your resume and provides personalized career advice using local LLMs and RAG (Retrieval-Augmented Generation).
+A Streamlit-based AI resume analyzer and job matching assistant that reviews resume PDFs, scores fit against a job description, and provides personalized career advice using local LLMs and RAG (Retrieval-Augmented Generation).
 
 ## Prerequisites
 
@@ -34,12 +34,16 @@ A Streamlit-based AI chatbot that analyzes your resume and provides personalized
 2. **How to use**:
    - Upload your resume PDF in the sidebar
    - Click "Process Resume" to load it
+   - Optionally paste a job description to get a match score and missing-skill analysis
+   - Or paste a job URL and fetch the description automatically
    - Ask questions about your resume or career in the chat interface
    - Use quick question buttons for common queries
 
 ## Features
 
 - **Resume Analysis**: Get detailed feedback on strengths, weaknesses, and improvements
+- **Job Matching**: Paste a job description to see match score, missing skills, and suggestions
+- **Resume Scoring**: Get a 0-100 score based on the resume content and question context
 - **Career Advice**: Receive tailored recommendations based on your experience
 - **Chat Interface**: Conversational AI with chat history
 - **Local Processing**: Everything runs locally - no data sent to the cloud
@@ -48,7 +52,7 @@ A Streamlit-based AI chatbot that analyzes your resume and provides personalized
 ## Tech Stack
 
 - **Frontend**: Streamlit
-- **Vector DB**: ChromaDB with Ollama embeddings
+- **Storage**: MySQL for users, resumes, chunks, and chat history
 - **LLM**: Llama 3.2 3B via Ollama
 - **PDF Processing**: PyMuPDF + LangChain
 - **Re-ranking**: Sentence Transformers CrossEncoder

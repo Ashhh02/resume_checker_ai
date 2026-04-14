@@ -1,9 +1,11 @@
 streamlit
 chromadb
 ollama
+requests
 langchain
 langchain-community
 langchain-text-splitters
 pymupdf
 sentence-transformers
 mysql-connector-python
+beautifulsoup4

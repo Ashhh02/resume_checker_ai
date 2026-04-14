@@ -4,11 +4,13 @@ import uuid
 
 import ollama
 import streamlit as st
+import requests
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import CrossEncoder
 from streamlit.runtime.uploaded_file_manager import UploadedFile
+from bs4 import BeautifulSoup
 
 try:
     import mysql.connector as mysql_connector
@@ -19,21 +21,33 @@ except ImportError:  # pragma: no cover - app can still run without MySQL suppor
 
 
 system_prompt = """
-You are an expert resume reviewer and career advisor with 15 years of HR and recruiting experience.
+You are a senior resume reviewer, recruiter, and career advisor.
 
-You are given chunks of the user's resume as context. Your job is to:
-- Analyze the resume content thoroughly
-- Give specific, actionable feedback (not generic advice)
-- Suggest concrete rewrites and improvements with examples
-- Recommend suitable career paths based on the skills and experience you see
-- Point out both strengths and weaknesses per section
+You analyze only the provided resume context and optional job description.
 
-RULES:
-- Only base your answer on the provided resume context
-- Never make up job titles, companies, or skills not present in the context
-- If the context does not contain enough information to answer, say: "I couldn't find that information in your resume. Could you clarify or add more detail?"
-- Format responses clearly: use bullet points, bold headers, and examples
-- Be encouraging but honest
+Your responsibilities:
+- Score the resume from 0 to 100
+- If a job description is provided, calculate a match score from 0 to 100
+- Identify missing skills, role gaps, and weak sections
+- Rewrite resume content when asked
+- Suggest career paths, next-step roles, and improvement priorities
+- Give specific, actionable feedback with examples
+
+Response rules:
+- Use only facts found in the provided context
+- Do not invent employers, degrees, certifications, tools, or achievements
+- If information is missing, say so clearly
+- Avoid generic advice like "tailor your resume" unless you explain exactly how
+- Keep the response structured with these exact sections when possible:
+  1. **Score**
+  2. **Match Analysis**
+  3. **Missing Skills**
+  4. **Resume Rewrite**
+  5. **Career Recommendations**
+  6. **Next Actions**
+- Use bullets, short paragraphs, and concise examples
+- If rewriting content, provide improved text in quotation marks or a code block
+- Be direct, helpful, and honest
 """
 
 
@@ -329,7 +343,49 @@ def load_cross_encoder():
     return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 
+def extract_job_description(url: str) -> str:
+    if not url or not url.strip():
+        raise ValueError("Please paste a job URL first.")
+
+    response = requests.get(
+        url.strip(),
+        timeout=15,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            )
+        },
+    )
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    parts = []
+    if soup.title and soup.title.get_text(strip=True):
+        parts.append(f"Title: {soup.title.get_text(strip=True)}")
+
+    for meta_name in ("description", "og:description"):
+        meta = soup.find("meta", attrs={"name": meta_name}) or soup.find(
+            "meta", attrs={"property": meta_name}
+        )
+        if meta and meta.get("content"):
+            parts.append(f"{meta_name.title()}: {meta['content'].strip()}")
+
+    text = soup.get_text(separator="\n")
+    text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+    parts.append(text)
+
+    job_description = "\n\n".join(parts)
+    return job_description[:3000]
+
+
 def process_document(uploaded_file: UploadedFile) -> list[Document]:
+    if uploaded_file is None:
+        raise ValueError("Please upload a PDF resume first.")
+    if getattr(uploaded_file, "size", 0) == 0:
+        raise ValueError("The uploaded PDF is empty.")
+
     temp_file = tempfile.NamedTemporaryFile("wb", suffix=".pdf", delete=False)
     temp_file.write(uploaded_file.read())
     temp_file_path = temp_file.name
@@ -347,44 +403,100 @@ def process_document(uploaded_file: UploadedFile) -> list[Document]:
         chunk_overlap=100,
     )
 
-    return splitter.split_documents(docs)
+    chunks = splitter.split_documents(docs)
+    if not chunks:
+        raise ValueError("No readable text was found in this PDF.")
+
+    return chunks
 
 
-def re_rank_cross_encoders(prompt: str, documents: list[str]):
+def dedupe_documents(documents: list[str]) -> list[str]:
+    seen = set()
+    unique_documents = []
+    for doc in documents:
+        normalized = " ".join(doc.split())
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique_documents.append(doc)
+    return unique_documents
+
+
+def re_rank_cross_encoders(prompt: str, documents: list[str], top_k: int = 4):
     encoder = load_cross_encoder()
-    ranks = encoder.rank(prompt, documents, top_k=3)
+    unique_documents = dedupe_documents(documents)
+    if not unique_documents:
+        return "", [], []
 
-    relevant_text = ""
+    top_k = min(max(3, top_k), 5, len(unique_documents))
+    ranks = encoder.rank(prompt, unique_documents, top_k=top_k)
+
+    relevant_text = []
     relevant_ids = []
-
+    seen_ids = set()
     for r in ranks:
-        relevant_text += documents[r["corpus_id"]] + "\n\n"
-        relevant_ids.append(r["corpus_id"])
+        corpus_id = r["corpus_id"]
+        if corpus_id in seen_ids:
+            continue
+        seen_ids.add(corpus_id)
+        relevant_text.append(unique_documents[corpus_id])
+        relevant_ids.append(corpus_id)
 
-    return relevant_text, relevant_ids
+    return "\n\n".join(relevant_text), relevant_ids, relevant_text
 
 
-def search_resume_context(prompt: str, session_id: str, file_name: str | None = None):
+def search_resume_context(
+    prompt: str,
+    session_id: str,
+    file_name: str | None = None,
+    job_description: str | None = None,
+):
     docs = load_resume_chunks(session_id, file_name)
     if not docs:
         docs = load_resume_chunks_for_latest_upload()
         if not docs:
             return "", [], []
 
-    context, relevant_ids = re_rank_cross_encoders(prompt, docs)
-    return context, relevant_ids, docs
+    search_query = prompt
+    if job_description:
+        search_query = f"{prompt}\n\nJob Description:\n{job_description}"
+
+    context, relevant_ids, selected_chunks = re_rank_cross_encoders(search_query, docs)
+    return context, relevant_ids, selected_chunks
 
 
-def call_llm(context: str, prompt: str):
+def extract_score(text: str) -> int | None:
+    import re
+
+    patterns = [
+        r"(?:Match Score|Resume Score|Score)\s*[:\-]?\s*(\d{1,3})\s*/\s*100",
+        r"(?:Match Score|Resume Score|Score)\s*[:\-]?\s*(\d{1,3})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            score = int(match.group(1))
+            return max(0, min(score, 100))
+    return None
+
+
+def call_llm(context: str, prompt: str, job_description: str | None = None):
+    user_content = (
+        "Use the resume context below to answer the request.\n\n"
+        f"Resume Context:\n{context}\n\n"
+    )
+    if job_description and job_description.strip():
+        user_content += f"Job Description:\n{job_description.strip()}\n\n"
+    user_content += f"User Request:\n{prompt}"
+
     response = ollama.chat(
         model="llama3.2:3b",
         stream=True,
+        options={
+            "temperature": 0.2,
+        },
         messages=[
             {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": f"Context:\n{context}\n\nQuestion:\n{prompt}",
-            },
+            {"role": "user", "content": user_content},
         ],
     )
 
@@ -421,6 +533,28 @@ with st.sidebar:
         type=["pdf"],
         accept_multiple_files=False,
         help="Your resume is processed locally. Nothing is sent to the cloud.",
+    )
+
+    st.subheader("Job Matching")
+    st.session_state["job_url"] = st.text_input(
+        "Paste Job URL",
+        value=st.session_state.get("job_url", ""),
+        placeholder="https://... (LinkedIn, JobStreet, company careers page, etc.)",
+    )
+    if st.button("Fetch Job Description", use_container_width=True):
+        try:
+            with st.spinner("Extracting job description from URL..."):
+                extracted = extract_job_description(st.session_state.get("job_url", ""))
+                st.session_state["job_description"] = extracted
+                st.success("Job description loaded from URL.")
+        except Exception as exc:
+            st.error(f"Could not extract job description: {exc}")
+
+    st.session_state["job_description"] = st.text_area(
+        "Paste Job Description",
+        value=st.session_state.get("job_description", ""),
+        height=180,
+        placeholder="Paste a job description here, or fetch one from a job URL above.",
     )
 
     if st.button("Process Resume", use_container_width=True) and uploaded_file:
@@ -519,10 +653,11 @@ if prompt:
         with st.status("Analyzing your resume...", expanded=False) as status:
             try:
                 status.write("Searching resume content...")
-                context, relevant_ids, docs = search_resume_context(
+                context, relevant_ids, selected_chunks = search_resume_context(
                     prompt,
                     st.session_state["session_id"],
                     st.session_state.get("resume_name"),
+                    st.session_state.get("job_description"),
                 )
 
                 if not context.strip():
@@ -539,11 +674,16 @@ if prompt:
                 st.error(f"Error: {exc}")
                 st.stop()
 
-        response_placeholder = st.empty()
-        full_response = ""
-        for chunk in call_llm(context, prompt):
-            full_response += chunk
-            response_placeholder.markdown(full_response)
+        with st.spinner("Generating structured answer..."):
+            response_placeholder = st.empty()
+            full_response = ""
+            for chunk in call_llm(
+                context,
+                prompt,
+                st.session_state.get("job_description"),
+            ):
+                full_response += chunk
+                response_placeholder.markdown(full_response)
 
         st.session_state.messages.append(
             {
@@ -553,6 +693,13 @@ if prompt:
         )
         save_chat_message(st.session_state["session_id"], "assistant", full_response)
 
+        match_score = extract_score(full_response)
+        if match_score is not None:
+            st.markdown("**Match Score**")
+            st.progress(match_score / 100.0)
+            st.caption(f"{match_score}/100")
+
         with st.expander("Resume sections used for this answer"):
-            for i, doc in enumerate(docs):
-                st.markdown(f"**Chunk {i + 1}:** {doc[:300]}...")
+            for i, chunk in enumerate(selected_chunks):
+                preview = chunk[:300].replace("\n", " ")
+                st.markdown(f"- **Chunk {i + 1}**: {preview}...")
