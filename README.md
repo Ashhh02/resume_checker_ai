@@ -1,62 +1,75 @@
-# Resume & Career Advisor Chatbot
+# Resume Analysis and Career Recommendation System
 
-A Streamlit-based AI resume analyzer and job matching assistant that reviews resume PDFs, scores fit against a job description, and provides personalized career advice using local LLMs and RAG (Retrieval-Augmented Generation).
+Streamlit app for resume analysis, job-fit checking, and career guidance using a local LLM (Ollama), LangChain chunking, and Cross-Encoder reranking.  
+Data persistence is MySQL-backed for users, uploaded resumes, resume chunks, and chat history.
+
+## Core Functions
+
+- Upload and parse PDF resumes
+- Split resume content into chunks
+- Store resume metadata/chunks in MySQL
+- Ask resume-aware questions in chat
+- Save chat messages to MySQL
+- Compare resume context against a pasted/fetched job description
+
+## Tech Stack
+
+- Frontend: Streamlit
+- Backend: Python
+- AI/LLM: Ollama (`llama3.2:3b`)
+- NLP Pipeline: LangChain + PyMuPDF
+- Reranking: `cross-encoder/ms-marco-MiniLM-L-6-v2`
+- Database: MySQL
 
 ## Prerequisites
 
 - Python 3.10+
+- MySQL server running
 - Ollama installed and running locally
 
 ## Setup
 
-1. **Install Ollama** (if not already installed):
-   - Download from [ollama.ai](https://ollama.ai)
-   - Start the Ollama service
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-2. **Pull required models**:
-   ```bash
-   ollama pull llama3.2:3b
-   ollama pull nomic-embed-text
-   ```
+2. Pull Ollama model:
+```bash
+ollama pull llama3.2:3b
+```
 
-3. **Install Python dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+3. Create `.env` in the project root:
+```env
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_mysql_password
+DB_NAME=resume_ai
+```
 
-## Usage
+4. Ensure your MySQL schema/tables already exist in `resume_ai`:
+- `users`
+- `resumes`
+- `resume_chunks`
+- `chat_sessions`
+- `chat_messages`
 
-1. **Run the app**:
-   ```bash
-   streamlit run resume.py
-   ```
+## Run
 
-2. **How to use**:
-   - Upload your resume PDF in the sidebar
-   - Click "Process Resume" to load it
-   - Optionally paste a job description to get a match score and missing-skill analysis
-   - Or paste a job URL and fetch the description automatically
-   - Ask questions about your resume or career in the chat interface
-   - Use quick question buttons for common queries
+```bash
+streamlit run resume.py
+```
 
-## Features
+## How to Use
 
-- **Resume Analysis**: Get detailed feedback on strengths, weaknesses, and improvements
-- **Job Matching**: Paste a job description to see match score, missing skills, and suggestions
-- **Resume Scoring**: Get a 0-100 score based on the resume content and question context
-- **Career Advice**: Receive tailored recommendations based on your experience
-- **Chat Interface**: Conversational AI with chat history
-- **Local Processing**: Everything runs locally - no data sent to the cloud
-- **RAG Technology**: Uses vector search and re-ranking for accurate responses
+1. Upload a resume PDF in the sidebar.
+2. Click `Process Resume`.
+3. Optionally paste a job URL and click `Fetch Job Description`, or paste job text directly.
+4. Ask questions in the chat (score, missing skills, rewrite suggestions, role fit, next actions).
 
-## Tech Stack
+## Notes
 
-- **Frontend**: Streamlit
-- **Storage**: MySQL for users, resumes, chunks, and chat history
-- **LLM**: Llama 3.2 3B via Ollama
-- **PDF Processing**: PyMuPDF + LangChain
-- **Re-ranking**: Sentence Transformers CrossEncoder
-
-## Note
-
-This app is fully local and privacy-focused. Your resume data never leaves your machine, and no API keys are required.
+- This project uses `.env` values for MySQL connection.
+- `.env` is ignored by git (`.gitignore`) to protect credentials.
+- If you see `1045 Access denied`, verify `.env` username/password and restart Streamlit.
