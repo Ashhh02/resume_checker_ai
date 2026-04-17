@@ -5,6 +5,21 @@ from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from streamlit.runtime.uploaded_file_manager import UploadedFile
+from dotenv import load_dotenv
+
+load_dotenv()
+
+def _require_env(key: str) -> str:
+    value = os.getenv(key)
+    if value is None or not value.strip():
+        raise ValueError(f"Missing required environment variable: {key}")
+    return value.strip()
+
+def _require_env_key(key: str) -> str:
+    # Allow empty values (for example DB_PASSWORD can be intentionally blank).
+    if key not in os.environ:
+        raise ValueError(f"Missing required environment variable: {key}")
+    return os.getenv(key, "")
 
 try:
     import mysql.connector as mysql_connector
@@ -15,11 +30,11 @@ except ImportError:  # pragma: no cover - app can still run without MySQL suppor
 
 def get_mysql_config() -> dict[str, object]:
     return {
-        "host": os.getenv("DB_HOST") or "127.0.0.1",
-        "port": int(os.getenv("DB_PORT") or "3306"),
-        "user": os.getenv("DB_USER") or "root",
-        "password": os.getenv("DB_PASSWORD") or "4Shyn.zyyy20",
-        "database": os.getenv("DB_NAME") or "resume_ai",
+        "host": _require_env("DB_HOST"),
+        "port": int(_require_env("DB_PORT")),
+        "user": _require_env("DB_USER"),
+        "password": _require_env_key("DB_PASSWORD"),
+        "database": _require_env("DB_NAME"),
     }
 
 def connect_mysql():
@@ -29,11 +44,13 @@ def connect_mysql():
 
     try:
         return mysql_connector.connect(**get_mysql_config())
+    except ValueError as exc:
+        st.session_state["mysql_error"] = str(exc)
+        return None
     except Error as exc:
         st.session_state["mysql_error"] = str(exc)
         return None
 
-@st.cache_resource
 def test_mysql_connection() -> bool:
     connection = connect_mysql()
     if connection is None:
@@ -207,7 +224,7 @@ def load_latest_resume_name() -> str | None:
             cursor.close()
         connection.close()
 
-def load_latest_resume_reference() -> tuple[int, str] | None:
+def load_latest_resume_reference(session_id: str) -> tuple[int, str] | None:
     connection = connect_mysql()
     if connection is None:
         return None
@@ -219,9 +236,12 @@ def load_latest_resume_reference() -> tuple[int, str] | None:
             """
             SELECT r.id, r.file_name
             FROM resumes r
+            JOIN users u ON r.user_id = u.id
+            WHERE u.session_id = %s
             ORDER BY r.uploaded_at DESC, r.id DESC
             LIMIT 1
-            """
+            """,
+            (session_id,),
         )
         row = cursor.fetchone()
         if not row:
@@ -235,8 +255,8 @@ def load_latest_resume_reference() -> tuple[int, str] | None:
             cursor.close()
         connection.close()
 
-def load_resume_chunks_for_latest_upload() -> list[str]:
-    latest_ref = load_latest_resume_reference()
+def load_resume_chunks_for_latest_upload(session_id: str) -> list[str]:
+    latest_ref = load_latest_resume_reference(session_id)
     if latest_ref is None:
         return []
 
@@ -274,6 +294,29 @@ def save_chat_message(session_id: str, role: str, content: str) -> None:
     cursor = None
     try:
         cursor = connection.cursor()
+        user_id = get_or_create_user_id(session_id)
+        if user_id is None:
+            raise RuntimeError("Could not create or load user row.")
+
+        cursor.execute(
+            """
+            SELECT id
+            FROM chat_sessions
+            WHERE user_id = %s AND session_name = %s
+            LIMIT 1
+            """,
+            (user_id, session_id),
+        )
+        existing_session = cursor.fetchone()
+        if existing_session is None:
+            cursor.execute(
+                """
+                INSERT INTO chat_sessions (user_id, session_name)
+                VALUES (%s, %s)
+                """,
+                (user_id, session_id),
+            )
+
         cursor.execute(
             """
             INSERT INTO chat_messages (session_id, role, content)
@@ -284,6 +327,36 @@ def save_chat_message(session_id: str, role: str, content: str) -> None:
         connection.commit()
     except Error as exc:
         st.session_state["mysql_error"] = str(exc)
+    except RuntimeError as exc:
+        st.session_state["mysql_error"] = str(exc)
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
+
+def load_chat_messages(session_id: str, limit: int = 50) -> list[dict[str, str]]:
+    connection = connect_mysql()
+    if connection is None:
+        return []
+
+    cursor = None
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT role, content
+            FROM chat_messages
+            WHERE session_id = %s
+            ORDER BY created_at ASC, id ASC
+            LIMIT %s
+            """,
+            (session_id, limit),
+        )
+        rows = cursor.fetchall()
+        return [{"role": row[0], "content": row[1]} for row in rows]
+    except Error as exc:
+        st.session_state["mysql_error"] = str(exc)
+        return []
     finally:
         if cursor is not None:
             cursor.close()

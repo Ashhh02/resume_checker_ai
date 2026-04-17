@@ -1,5 +1,4 @@
 streamlit
-chromadb
 ollama
 requests
 langchain
@@ -9,3 +8,4 @@ pymupdf
 sentence-transformers
 mysql-connector-python
 beautifulsoup4
+python-dotenv

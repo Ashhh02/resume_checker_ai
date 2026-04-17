@@ -116,7 +116,7 @@ def search_resume_context(
 ):
     docs = load_resume_chunks(session_id, file_name)
     if not docs:
-        docs = load_resume_chunks_for_latest_upload()
+        docs = load_resume_chunks_for_latest_upload(session_id)
         if not docs:
             return "", [], []
 

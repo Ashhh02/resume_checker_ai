@@ -1,13 +1,18 @@
 import uuid
+from pathlib import Path
+
 import streamlit as st
+
 from resume_ai import call_llm, extract_job_description, extract_score, search_resume_context
 from resume_db import (
+    load_chat_messages,
     process_document,
     save_chat_message,
     save_resume_chunks,
     save_resume_upload,
     test_mysql_connection,
 )
+
 
 def inject_styles() -> None:
     st.markdown(
@@ -89,14 +94,6 @@ def inject_styles() -> None:
                 font-size: 0.82rem;
             }
 
-            .section-card {
-                background: rgba(15, 23, 42, 0.72);
-                border: 1px solid rgba(148, 163, 184, 0.16);
-                border-radius: 20px;
-                padding: 1rem 1rem 0.75rem 1rem;
-                box-shadow: 0 18px 60px rgba(0, 0, 0, 0.18);
-            }
-
             .section-label {
                 font-size: 0.8rem;
                 text-transform: uppercase;
@@ -153,6 +150,7 @@ def inject_styles() -> None:
         unsafe_allow_html=True,
     )
 
+
 def render_hero() -> None:
     resume_loaded = bool(st.session_state.get("resume_loaded"))
     job_loaded = bool((st.session_state.get("job_description") or "").strip())
@@ -178,6 +176,7 @@ def render_hero() -> None:
         unsafe_allow_html=True,
     )
 
+
 def render_status_strip() -> None:
     resume_loaded = bool(st.session_state.get("resume_loaded"))
     resume_name = st.session_state.get("resume_name") or "No resume loaded"
@@ -191,6 +190,7 @@ def render_status_strip() -> None:
     with col3:
         st.metric("Analysis", "RAG + Match", "Local Ollama")
 
+
 st.set_page_config(
     page_title="Resume Analysis and Career Recommendation System",
     page_icon="CV",
@@ -198,9 +198,24 @@ st.set_page_config(
 )
 
 inject_styles()
+USER_AVATAR_PATH = Path(__file__).parent / "assets" / "user.png"
 
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = uuid.uuid4().hex
+
+if "messages" not in st.session_state:
+    db_messages = load_chat_messages(st.session_state["session_id"])
+    if db_messages:
+        st.session_state.messages = db_messages
+    else:
+        st.session_state.messages = [
+            {
+                "role": "assistant",
+                "content": (
+                    "Upload your resume, optionally add a job description or job URL, and I'll give you a structured match analysis with score, gaps, and suggestions."
+                ),
+            }
+        ]
 
 with st.sidebar:
     st.markdown('<div class="section-label">Workspace</div>', unsafe_allow_html=True)
@@ -259,7 +274,8 @@ with st.sidebar:
                     len(splits),
                 )
                 if resume_id is None:
-                    raise RuntimeError("Could not save resume metadata to MySQL.")
+                    mysql_error = st.session_state.get("mysql_error") or "Unknown MySQL error."
+                    raise RuntimeError(f"Could not save resume metadata to MySQL. {mysql_error}")
                 save_resume_chunks(resume_id, splits)
                 st.success("Resume loaded. Ask me anything below.")
                 st.session_state["resume_loaded"] = True
@@ -297,6 +313,7 @@ with st.sidebar:
 
     st.divider()
     if st.button("Clear Chat", use_container_width=True):
+        st.session_state["session_id"] = uuid.uuid4().hex
         st.session_state.messages = [
             {
                 "role": "assistant",
@@ -305,16 +322,6 @@ with st.sidebar:
         ]
         st.session_state["resume_loaded"] = False
         st.rerun()
-
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {
-            "role": "assistant",
-            "content": (
-                "Upload your resume, optionally add a job description or job URL, and I’ll give you a structured match analysis with score, gaps, and suggestions."
-            ),
-        }
-    ]
 
 render_hero()
 st.write("")
@@ -327,13 +334,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-USER_AVATAR = "👤" 
-AI_AVATAR = "🤖"
 for msg in st.session_state.messages:
-    avatar_icon = AI_AVATAR if msg["role"] == "assistant" else USER_AVATAR
-    
-    with st.chat_message(msg["role"], avatar=avatar_icon):
-        st.markdown(msg["content"])
+    if msg["role"] == "user" and USER_AVATAR_PATH.exists():
+        with st.chat_message(msg["role"], avatar=str(USER_AVATAR_PATH)):
+            st.markdown(msg["content"])
+    else:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
 default_input = st.session_state.pop("quick_input", "")
 
@@ -344,17 +351,21 @@ prompt = st.chat_input(
 
 if prompt:
     if not st.session_state.get("resume_loaded"):
-        with st.chat_message("assistant", avatar="⚠️"):
+        with st.chat_message("assistant"):
             st.warning("Please upload and process your resume first using the sidebar.")
         st.stop()
 
     st.session_state.messages.append({"role": "user", "content": prompt})
     save_chat_message(st.session_state["session_id"], "user", prompt)
 
-    with st.chat_message("user", avatar=USER_AVATAR):
-        st.markdown(prompt)
+    if USER_AVATAR_PATH.exists():
+        with st.chat_message("user", avatar=str(USER_AVATAR_PATH)):
+            st.markdown(prompt)
+    else:
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-    with st.chat_message("assistant", avatar="assistant"):
+    with st.chat_message("assistant"):
         with st.status("Analyzing your resume...", expanded=False) as status:
             try:
                 status.write("Searching resume content...")
