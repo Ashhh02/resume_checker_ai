@@ -1,8 +1,10 @@
 import os
 import re
+import json
 
 import ollama
 import requests
+import streamlit as st
 from bs4 import BeautifulSoup
 from resume_db import load_resume_text, load_resume_text_for_latest_upload
 
@@ -218,32 +220,84 @@ def call_llm(
         user_content += f"Job Description:\n{job_description.strip()}\n\n"
     user_content += f"User Request:\n{prompt}"
 
-    # Get Together.ai API key from environment
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+    # Models like qwen2.5:7b-instruct and llama3.2:3b are local Ollama models.
+    # Only send provider-qualified models such as "meta-llama/..." to Together.
+    if "/" not in model:
+        try:
+            response = ollama.chat(
+                model=model,
+                messages=messages,
+                stream=True,
+                options={
+                    "temperature": 0.2,
+                },
+            )
+            for chunk in response:
+                message = chunk.get("message", {})
+                content = message.get("content", "")
+                if content:
+                    yield content
+            return
+        except Exception as exc:
+            raise RuntimeError(f"Local Ollama error for model '{model}': {exc}") from exc
+
     together_api_key = os.getenv("TOGETHER_API_KEY")
+    if not together_api_key:
+        try:
+            together_api_key = str(st.secrets.get("TOGETHER_API_KEY", "")).strip()
+        except Exception:
+            together_api_key = ""
     if not together_api_key:
         raise ValueError("TOGETHER_API_KEY environment variable is not set")
 
-    # Configure Ollama to use Together.ai endpoint
-    client = ollama.Client(
-        host="https://api.together.xyz",
-        headers={"Authorization": f"Bearer {together_api_key}"}
-    )
-    
     try:
-        response = client.chat(
-            model=model,
-            stream=True,
-            options={
-                "temperature": 0.2,
+        with requests.post(
+            "https://api.together.xyz/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {together_api_key}",
+                "Content-Type": "application/json",
             },
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-        )
+            json={
+                "model": model,
+                "messages": messages,
+                "temperature": 0.2,
+                "stream": True,
+            },
+            stream=True,
+            timeout=120,
+        ) as response:
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"Together.ai request failed with status {response.status_code}: "
+                    f"{response.text[:500]}"
+                )
 
-        for chunk in response:
-            if not chunk["done"]:
-                yield chunk["message"]["content"]
-    except Exception as e:
-        raise RuntimeError(f"Together.ai API error: {str(e)}")
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                if not line.startswith("data:"):
+                    continue
+
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+
+                try:
+                    chunk = json.loads(payload)
+                except Exception:
+                    continue
+
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content", "")
+                if content:
+                    yield content
+    except Exception as exc:
+        raise RuntimeError(f"Together.ai API error: {exc}") from exc
