@@ -3,13 +3,19 @@ from pathlib import Path
 
 import streamlit as st
 
-from resume_ai import call_llm, extract_job_description, extract_score, search_resume_context
+from resume_ai import (
+    DEFAULT_MODEL,
+    call_llm,
+    extract_job_description,
+    extract_score,
+    search_resume_context,
+)
 from resume_db import (
     load_chat_messages,
     process_document,
     save_chat_message,
-    save_resume_chunks,
     save_resume_upload,
+    save_resume_text,
     test_mysql_connection,
 )
 
@@ -166,8 +172,8 @@ def render_hero() -> None:
             </div>
             <div class="pill-row">
                 <span class="pill">Local Ollama</span>
-                <span class="pill">MySQL-backed history</span>
-                <span class="pill">Cross-encoder reranking</span>
+                <span class="pill">MySQL</span>
+                <span class="pill">Direct resume context</span>
                 <span class="pill">{'Resume loaded' if resume_loaded else 'Resume not loaded'}</span>
                 <span class="pill">{'Job source ready' if (job_loaded or job_url) else 'No job source yet'}</span>
             </div>
@@ -181,6 +187,7 @@ def render_status_strip() -> None:
     resume_loaded = bool(st.session_state.get("resume_loaded"))
     resume_name = st.session_state.get("resume_name") or "No resume loaded"
     job_text = (st.session_state.get("job_description") or "").strip()
+    selected_model = st.session_state.get("ollama_model", DEFAULT_MODEL)
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -188,7 +195,7 @@ def render_status_strip() -> None:
     with col2:
         st.metric("Job Source", "Loaded" if job_text else "Pending", "URL or pasted text")
     with col3:
-        st.metric("Analysis", "RAG + Match", "Local Ollama")
+        st.metric("Analysis", "Direct Context", selected_model)
 
 
 st.set_page_config(
@@ -199,9 +206,13 @@ st.set_page_config(
 
 inject_styles()
 USER_AVATAR_PATH = Path(__file__).parent / "assets" / "user.png"
+ASSISTANT_AVATAR_PATH = Path(__file__).parent / "assets" / "chatbot.png"
 
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = uuid.uuid4().hex
+
+if "ollama_model" not in st.session_state:
+    st.session_state["ollama_model"] = DEFAULT_MODEL
 
 if "messages" not in st.session_state:
     db_messages = load_chat_messages(st.session_state["session_id"])
@@ -218,7 +229,7 @@ if "messages" not in st.session_state:
         ]
 
 with st.sidebar:
-    st.markdown('<div class="section-label">Workspace</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Nash Final Project</div>', unsafe_allow_html=True)
     st.markdown("### Resume Explorer")
     st.markdown(
         '<div class="soft-note">Upload a resume, load a job description, then ask for a fit analysis.</div>',
@@ -240,6 +251,27 @@ with st.sidebar:
         type=["pdf"],
         accept_multiple_files=False,
         help="Your resume is processed locally. Nothing is sent to the cloud.",
+    )
+
+    st.markdown('<div class="section-label">AI Model</div>', unsafe_allow_html=True)
+    recommended_models = [
+        "qwen2.5:7b-instruct",
+        "nomic-embed-text:latest",
+        "llama3.2:3b",
+    ]
+    default_model_index = (
+        recommended_models.index(st.session_state["ollama_model"])
+        if st.session_state["ollama_model"] in recommended_models
+        else 0
+    )
+    st.session_state["ollama_model"] = st.selectbox(
+        "Choose Ollama model",
+        options=recommended_models,
+        index=default_model_index,
+        help=(
+            "Recommended: qwen2.5:7b-instruct for better resume matching accuracy. "
+            "Make sure the model is installed in Ollama first."
+        ),
     )
 
     st.markdown('<div class="section-label">Job Match</div>', unsafe_allow_html=True)
@@ -267,16 +299,15 @@ with st.sidebar:
     if st.button("Process Resume", use_container_width=True) and uploaded_file:
         with st.spinner("Reading your resume..."):
             try:
-                splits = process_document(uploaded_file)
+                resume_text = process_document(uploaded_file)
                 resume_id = save_resume_upload(
                     st.session_state["session_id"],
                     uploaded_file.name,
-                    len(splits),
                 )
                 if resume_id is None:
                     mysql_error = st.session_state.get("mysql_error") or "Unknown MySQL error."
                     raise RuntimeError(f"Could not save resume metadata to MySQL. {mysql_error}")
-                save_resume_chunks(resume_id, splits)
+                save_resume_text(resume_id, resume_text)
                 st.success("Resume loaded. Ask me anything below.")
                 st.session_state["resume_loaded"] = True
                 st.session_state["resume_name"] = uploaded_file.name
@@ -338,6 +369,9 @@ for msg in st.session_state.messages:
     if msg["role"] == "user" and USER_AVATAR_PATH.exists():
         with st.chat_message(msg["role"], avatar=str(USER_AVATAR_PATH)):
             st.markdown(msg["content"])
+    elif msg["role"] == "assistant" and ASSISTANT_AVATAR_PATH.exists():
+        with st.chat_message(msg["role"], avatar=str(ASSISTANT_AVATAR_PATH)):
+            st.markdown(msg["content"])
     else:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -351,8 +385,12 @@ prompt = st.chat_input(
 
 if prompt:
     if not st.session_state.get("resume_loaded"):
-        with st.chat_message("assistant"):
-            st.warning("Please upload and process your resume first using the sidebar.")
+        if ASSISTANT_AVATAR_PATH.exists():
+            with st.chat_message("assistant", avatar=str(ASSISTANT_AVATAR_PATH)):
+                st.warning("Please upload and process your resume first using the sidebar.")
+        else:
+            with st.chat_message("assistant"):
+                st.warning("Please upload and process your resume first using the sidebar.")
         st.stop()
 
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -365,11 +403,16 @@ if prompt:
         with st.chat_message("user"):
             st.markdown(prompt)
 
-    with st.chat_message("assistant"):
+    if ASSISTANT_AVATAR_PATH.exists():
+        assistant_chat = st.chat_message("assistant", avatar=str(ASSISTANT_AVATAR_PATH))
+    else:
+        assistant_chat = st.chat_message("assistant")
+
+    with assistant_chat:
         with st.status("Analyzing your resume...", expanded=False) as status:
             try:
                 status.write("Searching resume content...")
-                context, relevant_ids, selected_chunks = search_resume_context(
+                context, selected_sections = search_resume_context(
                     prompt,
                     st.session_state["session_id"],
                     st.session_state.get("resume_name"),
@@ -384,7 +427,7 @@ if prompt:
                     st.stop()
 
                 status.write("Generating advice...")
-                status.update(label="Done", state="complete")
+                status.update(label="Done Analyzing of Nash AI", state="complete")
             except Exception as exc:
                 status.update(label="Error", state="error")
                 st.error(f"Error: {exc}")
@@ -397,6 +440,7 @@ if prompt:
                 context,
                 prompt,
                 st.session_state.get("job_description"),
+                st.session_state.get("ollama_model", DEFAULT_MODEL),
             ):
                 full_response += chunk
                 response_placeholder.markdown(full_response)
@@ -415,8 +459,13 @@ if prompt:
             st.progress(match_score / 100.0)
             st.caption(f"{match_score}/100")
 
-        with st.expander("Resume sections used for this answer"):
-            for i, chunk in enumerate(selected_chunks):
-                preview = chunk[:500].replace("\n", " ")
-                st.markdown(f"- **Chunk {i + 1}**: {preview}...")
-#testing
+        with st.expander("Resume context used for this answer"):
+            st.caption(
+                "Only the most relevant resume snippets for this question are shown here."
+            )
+            for index, section in enumerate(selected_sections, start=1):
+                cleaned_section = section.strip()
+                preview = cleaned_section[:500]
+                suffix = "..." if len(cleaned_section) > 500 else ""
+                st.markdown(f"**Snippet {index}**")
+                st.caption(preview + suffix)

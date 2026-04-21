@@ -2,8 +2,6 @@ import os
 import tempfile
 import streamlit as st
 from langchain_community.document_loaders import PyMuPDFLoader
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 from dotenv import load_dotenv
 
@@ -16,7 +14,6 @@ def _require_env(key: str) -> str:
     return value.strip()
 
 def _require_env_key(key: str) -> str:
-    # Allow empty values (for example DB_PASSWORD can be intentionally blank).
     if key not in os.environ:
         raise ValueError(f"Missing required environment variable: {key}")
     return os.getenv(key, "")
@@ -24,7 +21,7 @@ def _require_env_key(key: str) -> str:
 try:
     import mysql.connector as mysql_connector
     from mysql.connector import Error
-except ImportError:  # pragma: no cover - app can still run without MySQL support
+except ImportError:
     mysql_connector = None
     Error = Exception
 
@@ -98,7 +95,7 @@ def get_or_create_user_id(session_id: str) -> int | None:
             cursor.close()
         connection.close()
 
-def save_resume_upload(session_id: str, file_name: str, chunk_count: int) -> int | None:
+def save_resume_upload(session_id: str, file_name: str) -> int | None:
     connection = connect_mysql()
     if connection is None:
         return None
@@ -115,7 +112,7 @@ def save_resume_upload(session_id: str, file_name: str, chunk_count: int) -> int
             INSERT INTO resumes (user_id, file_name, chunk_count)
             VALUES (%s, %s, %s)
             """,
-            (user_id, file_name, chunk_count),
+            (user_id, file_name, 1),
         )
         connection.commit()
         return cursor.lastrowid
@@ -130,7 +127,7 @@ def save_resume_upload(session_id: str, file_name: str, chunk_count: int) -> int
             cursor.close()
         connection.close()
 
-def save_resume_chunks(resume_id: int, chunks: list[Document]) -> None:
+def save_resume_text(resume_id: int, resume_text: str) -> None:
     connection = connect_mysql()
     if connection is None:
         return
@@ -138,15 +135,12 @@ def save_resume_chunks(resume_id: int, chunks: list[Document]) -> None:
     cursor = None
     try:
         cursor = connection.cursor()
-        cursor.executemany(
+        cursor.execute(
             """
             INSERT INTO resume_chunks (resume_id, chunk_index, chunk_text)
             VALUES (%s, %s, %s)
             """,
-            [
-                (resume_id, idx, chunk.page_content)
-                for idx, chunk in enumerate(chunks)
-            ],
+            (resume_id, 0, resume_text),
         )
         connection.commit()
     except Error as exc:
@@ -156,10 +150,10 @@ def save_resume_chunks(resume_id: int, chunks: list[Document]) -> None:
             cursor.close()
         connection.close()
 
-def load_resume_chunks(session_id: str, file_name: str | None = None) -> list[str]:
+def load_resume_text(session_id: str, file_name: str | None = None) -> str:
     connection = connect_mysql()
     if connection is None:
-        return []
+        return ""
 
     cursor = None
     try:
@@ -189,36 +183,10 @@ def load_resume_chunks(session_id: str, file_name: str | None = None) -> list[st
                 (session_id,),
             )
         rows = cursor.fetchall()
-        return [row[0] for row in rows]
+        return "\n\n".join(row[0] for row in rows if row[0])
     except Error as exc:
         st.session_state["mysql_error"] = str(exc)
-        return []
-    finally:
-        if cursor is not None:
-            cursor.close()
-        connection.close()
-
-def load_latest_resume_name() -> str | None:
-    connection = connect_mysql()
-    if connection is None:
-        return None
-
-    cursor = None
-    try:
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            SELECT file_name
-            FROM resumes
-            ORDER BY uploaded_at DESC, id DESC
-            LIMIT 1
-            """
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
-    except Error as exc:
-        st.session_state["mysql_error"] = str(exc)
-        return None
+        return ""
     finally:
         if cursor is not None:
             cursor.close()
@@ -255,15 +223,15 @@ def load_latest_resume_reference(session_id: str) -> tuple[int, str] | None:
             cursor.close()
         connection.close()
 
-def load_resume_chunks_for_latest_upload(session_id: str) -> list[str]:
+def load_resume_text_for_latest_upload(session_id: str) -> str:
     latest_ref = load_latest_resume_reference(session_id)
     if latest_ref is None:
-        return []
+        return ""
 
     latest_resume_id, _ = latest_ref
     connection = connect_mysql()
     if connection is None:
-        return []
+        return ""
 
     cursor = None
     try:
@@ -277,10 +245,10 @@ def load_resume_chunks_for_latest_upload(session_id: str) -> list[str]:
             """,
             (latest_resume_id,),
         )
-        return [row[0] for row in cursor.fetchall()]
+        return "\n\n".join(row[0] for row in cursor.fetchall() if row[0])
     except Error as exc:
         st.session_state["mysql_error"] = str(exc)
-        return []
+        return ""
     finally:
         if cursor is not None:
             cursor.close()
@@ -362,7 +330,7 @@ def load_chat_messages(session_id: str, limit: int = 50) -> list[dict[str, str]]
             cursor.close()
         connection.close()
 
-def process_document(uploaded_file: UploadedFile) -> list[Document]:
+def process_document(uploaded_file: UploadedFile) -> str:
     if uploaded_file is None:
         raise ValueError("Please upload a PDF resume first.")
     if getattr(uploaded_file, "size", 0) == 0:
@@ -380,13 +348,8 @@ def process_document(uploaded_file: UploadedFile) -> list[Document]:
         if os.path.exists(temp_file_path):
             os.unlink(temp_file_path)
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400,
-        chunk_overlap=100,
-    )
-
-    chunks = splitter.split_documents(docs)
-    if not chunks:
+    full_text = "\n\n".join(doc.page_content.strip() for doc in docs if doc.page_content.strip())
+    if not full_text:
         raise ValueError("No readable text was found in this PDF.")
 
-    return chunks
+    return full_text
