@@ -330,9 +330,9 @@ if prompt:
             st.progress(match_score / 100.0)
             st.caption(f"{match_score}/100")
 
-        with st.expander("Resume context used for this answer"):
+        with st.expander("Summary of Relevant Resume Snippets"):
             st.caption(
-                "Only the most relevant resume snippets for this question are shown here."
+                "The most relevant resume snippets for this question are shown here."
             )
             for index, section in enumerate(selected_sections, start=1):
                 cleaned_section = section.strip()
