@@ -24,61 +24,106 @@ def inject_styles() -> None:
     st.markdown(
         """
         <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
             .stApp {
-                background:
-                    radial-gradient(circle at top left, rgba(46, 134, 222, 0.12), transparent 24%),
-                    radial-gradient(circle at top right, rgba(9, 132, 227, 0.10), transparent 18%),
-                    linear-gradient(180deg, #0b1020 0%, #0f172a 100%);
-                color: #e5eef9;
+                background-color: #ffffff;
+                color: #000000;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                .stApp {
+                    background-color: #0f1419;
+                    color: #ffffff;
+                }
             }
 
             .block-container {
-                padding-top: 1.5rem;
-                padding-bottom: 1.5rem;
-                max-width: 1280px;
+                padding-top: 2rem;
+                padding-bottom: 2rem;
+                max-width: 1200px;
             }
 
             section[data-testid="stSidebar"] {
-                background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(17, 24, 39, 0.98));
-                border-right: 1px solid rgba(148, 163, 184, 0.12);
+                background-color: #e8e8e8;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                section[data-testid="stSidebar"] {
+                    background-color: #2a2a2a;
+                }
             }
 
             section[data-testid="stSidebar"] > div {
-                padding-top: 1.25rem;
+                padding-top: 1.5rem;
             }
 
             div[data-testid="stHeader"] {
-                background: transparent;
+                background-color: transparent;
             }
 
+            /* Footer area */
+            footer {
+                background-color: #e8e8e8;
+            }
+
+            footer p {
+                color: #555555;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                footer {
+                    background-color: #2a2a2a;
+                }
+
+                footer p {
+                    color: #aaaaaa;
+                }
+            }
+
+            /* Hero Card */
             .hero-card {
-                background: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(30, 41, 59, 0.80));
-                border: 1px solid rgba(148, 163, 184, 0.16);
-                border-radius: 24px;
-                padding: 1.6rem 1.7rem;
-                box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
+                background-color: #0066cc;
+                border: none;
+                border-radius: 16px;
+                padding: 2rem;
+                box-shadow: 0 4px 16px rgba(0, 102, 204, 0.2);
+                color: #ffffff;
+                margin-bottom: 1.5rem;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                .hero-card {
+                    background-color: #1a3a5c;
+                    box-shadow: 0 4px 16px rgba(26, 58, 92, 0.4);
+                }
             }
 
             .hero-kicker {
                 text-transform: uppercase;
-                letter-spacing: 0.18em;
-                color: #93c5fd;
-                font-size: 0.72rem;
+                letter-spacing: 0.15em;
+                color: #b3d9ff;
+                font-size: 0.7rem;
                 font-weight: 700;
                 margin-bottom: 0.5rem;
             }
 
             .hero-title {
-                font-size: 2.05rem;
+                font-size: 1.8rem;
                 font-weight: 800;
-                line-height: 1.05;
-                color: #f8fafc;
-                margin-bottom: 0.45rem;
+                line-height: 1.2;
+                color: #ffffff;
+                margin-bottom: 0.6rem;
             }
 
             .hero-subtitle {
-                color: rgba(226, 232, 240, 0.78);
-                font-size: 0.98rem;
+                color: #e6f0ff;
+                font-size: 0.95rem;
+                line-height: 1.5;
                 margin-bottom: 1rem;
             }
 
@@ -86,70 +131,247 @@ def inject_styles() -> None:
                 display: flex;
                 flex-wrap: wrap;
                 gap: 0.5rem;
+                margin-top: 1rem;
             }
 
             .pill {
                 display: inline-flex;
                 align-items: center;
-                gap: 0.4rem;
-                padding: 0.35rem 0.7rem;
-                border-radius: 999px;
-                background: rgba(15, 23, 42, 0.65);
-                border: 1px solid rgba(148, 163, 184, 0.15);
-                color: #dbeafe;
-                font-size: 0.82rem;
+                padding: 0.4rem 0.8rem;
+                border-radius: 20px;
+                background-color: rgba(255, 255, 255, 0.2);
+                border: 1px solid rgba(255, 255, 255, 0.4);
+                color: #ffffff;
+                font-size: 0.8rem;
+                font-weight: 600;
+                white-space: nowrap;
             }
 
             .section-label {
-                font-size: 0.8rem;
+                font-size: 0.75rem;
                 text-transform: uppercase;
                 letter-spacing: 0.15em;
-                color: #93c5fd;
+                color: #0066cc;
                 font-weight: 700;
-                margin-bottom: 0.6rem;
+                margin-top: 1.2rem;
+                margin-bottom: 0.8rem;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                .section-label {
+                    color: #60a5fa;
+                }
             }
 
             .soft-note {
-                color: rgba(226, 232, 240, 0.7);
-                font-size: 0.92rem;
-                margin-bottom: 0.5rem;
+                color: #555555;
+                font-size: 0.9rem;
+                line-height: 1.4;
+                margin-bottom: 1rem;
             }
 
-            .stTextInput input, .stTextArea textarea {
-                background: rgba(15, 23, 42, 0.88) !important;
-                color: #f8fafc !important;
-                border: 1px solid rgba(148, 163, 184, 0.18) !important;
-                border-radius: 14px !important;
+            @media (prefers-color-scheme: dark) {
+                .soft-note {
+                    color: #cccccc;
+                }
             }
 
-            .stTextInput input::placeholder,
-            .stTextArea textarea::placeholder {
-                color: rgba(203, 213, 225, 0.55) !important;
+            /* Form Elements */
+            .stTextInput > div > div > input,
+            .stTextArea > div > div > textarea,
+            .stSelectbox > div > div > select {
+                background-color: #ffffff !important;
+                color: #000000 !important;
+                border: 2px solid #d0d0d0 !important;
+                border-radius: 8px !important;
+                padding: 0.7rem !important;
+                font-size: 0.95rem !important;
             }
 
+            @media (prefers-color-scheme: dark) {
+                .stTextInput > div > div > input,
+                .stTextArea > div > div > textarea,
+                .stSelectbox > div > div > select {
+                    background-color: #1a1a1a !important;
+                    color: #ffffff !important;
+                    border: 2px solid #333333 !important;
+                }
+            }
+
+            .stTextInput > div > div > input::placeholder,
+            .stTextArea > div > div > textarea::placeholder {
+                color: #888888 !important;
+            }
+
+            /* Buttons */
             .stButton > button {
-                border-radius: 14px;
-                border: 1px solid rgba(148, 163, 184, 0.18);
-                background: linear-gradient(135deg, #334155, #1f2937);
-                color: #f8fafc;
+                border-radius: 8px;
+                border: none;
+                background-color: #0066cc;
+                color: #ffffff;
                 font-weight: 600;
-                padding: 0.65rem 1rem;
+                padding: 0.7rem 1.2rem;
+                font-size: 0.95rem;
+                transition: all 0.3s ease;
+                width: 100%;
+                cursor: pointer;
             }
 
             .stButton > button:hover {
-                border-color: rgba(96, 165, 250, 0.55);
-                transform: translateY(-1px);
+                background-color: #0052a3;
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(0, 102, 204, 0.3);
             }
 
+            @media (prefers-color-scheme: dark) {
+                .stButton > button {
+                    background-color: #2563eb;
+                }
+
+                .stButton > button:hover {
+                    background-color: #1d4ed8;
+                }
+            }
+
+            /* Metrics */
+            .stMetric {
+                background-color: #f9f9f9;
+                border: 1px solid #e0e0e0;
+                border-radius: 12px;
+                padding: 1.2rem;
+                text-align: center;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                .stMetric {
+                    background-color: #1a1a1a;
+                    border: 1px solid #333333;
+                }
+            }
+
+            .stMetric > div:first-child {
+                color: #0066cc;
+                font-size: 0.8rem;
+                text-transform: uppercase;
+                font-weight: 700;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                .stMetric > div:first-child {
+                    color: #60a5fa;
+                }
+            }
+
+            .stMetric label {
+                color: #000000;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                .stMetric label {
+                    color: #ffffff;
+                }
+            }
+
+            /* Chat Messages */
             div[data-testid="stChatMessage"] {
-                border-radius: 18px;
-                padding-top: 0.25rem;
-                padding-bottom: 0.25rem;
+                border-radius: 12px;
+                padding: 0.75rem 1rem;
+                margin-bottom: 0.5rem;
             }
 
             [data-testid="stChatMessageAvatarUser"],
             [data-testid="stChatMessageAvatarAssistant"] {
-                border-radius: 12px;
+                border-radius: 8px;
+            }
+
+            /* Alerts */
+            .stAlert {
+                border-radius: 8px;
+                border: 1px solid;
+                padding: 1rem;
+            }
+
+            .stSuccess {
+                background-color: #d4edda;
+                color: #155724;
+                border-color: #c3e6cb;
+            }
+
+            .stWarning {
+                background-color: #fff3cd;
+                color: #856404;
+                border-color: #ffeeba;
+            }
+
+            .stInfo {
+                background-color: #d1ecf1;
+                color: #0c5460;
+                border-color: #bee5eb;
+            }
+
+            .stError {
+                background-color: #f8d7da;
+                color: #721c24;
+                border-color: #f5c6cb;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                .stSuccess {
+                    background-color: rgba(52, 211, 153, 0.2);
+                    color: #86efac;
+                    border-color: #34d399;
+                }
+
+                .stWarning {
+                    background-color: rgba(251, 191, 36, 0.2);
+                    color: #fcd34d;
+                    border-color: #fbbf24;
+                }
+
+                .stInfo {
+                    background-color: rgba(59, 130, 246, 0.2);
+                    color: #93c5fd;
+                    border-color: #3b82f6;
+                }
+
+                .stError {
+                    background-color: rgba(239, 68, 68, 0.2);
+                    color: #fca5a5;
+                    border-color: #ef4444;
+                }
+            }
+
+            /* Typography */
+            h1, h2, h3, h4, h5, h6 {
+                color: #000000;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                h1, h2, h3, h4, h5, h6 {
+                    color: #ffffff;
+                }
+            }
+
+            p {
+                color: #000000;
+                line-height: 1.6;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                p {
+                    color: #ffffff;
+                }
+            }
+
+            /* Labels and text */
+            label {
+                color: #000000;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                label {
+                    color: #ffffff;
+                }
             }
         </style>
         """,
