@@ -1,3 +1,4 @@
+import os
 import re
 
 import ollama
@@ -5,7 +6,8 @@ import requests
 from bs4 import BeautifulSoup
 from resume_db import load_resume_text, load_resume_text_for_latest_upload
 
-DEFAULT_MODEL = "qwen2.5:7b-instruct"
+# Use remote Ollama via Together.ai
+DEFAULT_MODEL = "meta-llama/Llama-2-7b-chat-hf"
 
 system_prompt = """
 You are a senior resume reviewer, recruiter, and career advisor.
@@ -216,18 +218,32 @@ def call_llm(
         user_content += f"Job Description:\n{job_description.strip()}\n\n"
     user_content += f"User Request:\n{prompt}"
 
-    response = ollama.chat(
-        model=model,
-        stream=True,
-        options={
-            "temperature": 0.2,
-        },
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-    )
+    # Get Together.ai API key from environment
+    together_api_key = os.getenv("TOGETHER_API_KEY")
+    if not together_api_key:
+        raise ValueError("TOGETHER_API_KEY environment variable is not set")
 
-    for chunk in response:
-        if not chunk["done"]:
-            yield chunk["message"]["content"]
+    # Configure Ollama to use Together.ai endpoint
+    client = ollama.Client(
+        host="https://api.together.xyz",
+        headers={"Authorization": f"Bearer {together_api_key}"}
+    )
+    
+    try:
+        response = client.chat(
+            model=model,
+            stream=True,
+            options={
+                "temperature": 0.2,
+            },
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+        )
+
+        for chunk in response:
+            if not chunk["done"]:
+                yield chunk["message"]["content"]
+    except Exception as e:
+        raise RuntimeError(f"Together.ai API error: {str(e)}")
